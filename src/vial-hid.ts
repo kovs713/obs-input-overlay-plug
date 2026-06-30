@@ -11,6 +11,8 @@ const VALUE_ID = {
   GET_CURRENT_LAYER: 0x04,
 };
 
+const CUSTOM_LAYER_EVENT = 0x4C;
+
 async function tryVialHandshake(dev: string): Promise<boolean> {
   try {
     const h = await fs.promises.open(dev, 'r+');
@@ -52,6 +54,7 @@ async function findVialDevice(preferred?: string): Promise<string | null> {
 
 export type VialHidCallbacks = {
   onLayer: (layer: number) => void;
+  onLayerKey?: (layer: number, pressed: boolean) => void;
 };
 
 export function startVialHid(options: {
@@ -61,6 +64,7 @@ export function startVialHid(options: {
   const { callbacks } = options;
   let running = true;
   let handle: any = null;
+  let pollTimer: ReturnType<typeof setInterval> | undefined;
 
   async function run() {
     const devicePath = await findVialDevice(options.device);
@@ -78,28 +82,45 @@ export function startVialHid(options: {
     }
 
     let pollCount = 0;
-    while (running) {
+
+    const pollCurrentLayer = async () => {
+      if (!running || !handle) return;
       try {
         const cmd = Buffer.alloc(HID_REPORT_SIZE);
         cmd[0] = CMD.GET_KEYBOARD_VALUE;
         cmd[1] = VALUE_ID.GET_CURRENT_LAYER;
         await handle.write(cmd);
+      } catch (err: any) {
+        if (running) console.error('[Vial] Poll write error:', err.message);
+      }
+    };
 
+    await pollCurrentLayer();
+    pollTimer = setInterval(() => {
+      pollCurrentLayer().catch((err: any) => {
+        if (running) console.error('[Vial] Poll error:', err.message);
+      });
+    }, 1000);
+
+    while (running) {
+      try {
         const resp = Buffer.alloc(HID_REPORT_SIZE);
         const { bytesRead } = await handle.read(resp, 0, HID_REPORT_SIZE);
 
-        if (pollCount < 3 || pollCount % 20 === 0) {
-          console.log(`[Vial] poll#${pollCount}: ${bytesRead}b [${resp[0]},${resp[1]},${resp[2]}]`);
-        }
-        pollCount++;
-
         if (bytesRead >= 3) {
-          callbacks.onLayer(resp[2]);
+          if (resp[0] === CUSTOM_LAYER_EVENT) {
+            callbacks.onLayerKey?.(resp[1], resp[2] === 1);
+          } else {
+            if (pollCount < 3 || pollCount % 20 === 0) {
+              console.log(`[Vial] poll#${pollCount}: ${bytesRead}b [${resp[0]},${resp[1]},${resp[2]}]`);
+            }
+            callbacks.onLayer(resp[2]);
+            pollCount++;
+          }
         }
       } catch (err: any) {
-        if (running) console.error('[Vial] Poll error:', err.message);
+        if (running) console.error('[Vial] Read error:', err.message);
       }
-      await new Promise(r => setTimeout(r, 250));
     }
   }
 
@@ -108,6 +129,7 @@ export function startVialHid(options: {
   return {
     stop: () => {
       running = false;
+      if (pollTimer) clearInterval(pollTimer);
       handle?.close().catch(() => {});
     },
   };

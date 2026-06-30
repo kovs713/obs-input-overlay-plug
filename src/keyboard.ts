@@ -2,6 +2,7 @@ import fs from 'fs';
 import type { Config, Layout } from './types.js';
 import { startLinuxInput } from './input-linux.js';
 import { startStdinInput } from './input-stdin.js';
+import { startVialHid } from './vial-hid.js';
 
 const KEYCODE_TO_NAME: Record<number, string> = {
   1: 'Escape', 2: 'Digit1', 3: 'Digit2', 4: 'Digit3',
@@ -37,12 +38,13 @@ for (const [k, v] of Object.entries(KEYCODE_TO_NAME)) NAME_TO_KEYCODE[v] = Numbe
 // Per-layer: linuxKeycode → physical position ID
 // Built from Vial layout raw keycodes
 const LAYER_KEYCODE_POS: Record<string, Record<number, string>> = {
-  ALPHA: {
+  SYM: {
+    15: 'L00', 1: 'L10', 27: 'R00', 43: 'R10',
     2: 'L11', 3: 'L12', 4: 'L13', 5: 'L14', 6: 'L15',   // 1-5
     7: 'R15', 8: 'R14', 9: 'R13', 10: 'R12', 11: 'R11',  // 6-0
     12: 'L23', 13: 'L24',                                  // - =
   },
-  FN: {
+  NAV: {
     59: 'L00', 60: 'L01', 61: 'L02', 62: 'L03', 63: 'L04', 64: 'L05',
     65: 'R05', 66: 'R04', 67: 'R03', 68: 'R02', 87: 'R01', 88: 'R00',
     225: 'L10', 210: 'L11', 274: 'L12', 273: 'L13', 272: 'L14',
@@ -52,11 +54,17 @@ const LAYER_KEYCODE_POS: Record<string, Record<number, string>> = {
   },
 };
 
-// Keycodes that uniquely identify a layer
-const KEYCODE_LAYER: Record<number, string> = {};
-for (const [layer, map] of Object.entries(LAYER_KEYCODE_POS)) {
-  for (const kc of Object.keys(map)) KEYCODE_LAYER[Number(kc)] = layer;
-}
+const LAYER_SHIFTED_KEYCODE_POS: Record<string, Record<number, string>> = {
+  SYM: {
+    2: 'L01', 3: 'L02', 4: 'L03', 5: 'L04', 6: 'L05',   // ! @ # $ %
+    7: 'R05', 8: 'R04', 9: 'R03', 10: 'R02', 11: 'R01', // ^ & * ( )
+    41: 'L20', 12: 'L21', 13: 'L22',                    // ~ _ +
+    26: 'R24', 27: 'R23', 51: 'R22', 52: 'R21',         // { } < >
+  },
+};
+
+const SHIFT_KEYCODES = new Set([42, 54]);
+
 // BASE-only keycodes (keys that don't change between layers)
 const BASE_KEYCODES = new Set<number>([
   16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
@@ -65,13 +73,37 @@ const BASE_KEYCODES = new Set<number>([
   40, 43, 26, 27, 57, 15, 1, 14, 28, 111,
 ]);
 
+// Keycodes that uniquely identify a layer. Base duplicates are ignored.
+const KEYCODE_LAYER: Record<number, string> = {};
+for (const [layer, map] of Object.entries(LAYER_KEYCODE_POS)) {
+  for (const kc of Object.keys(map)) {
+    const keycode = Number(kc);
+    if (!BASE_KEYCODES.has(keycode)) KEYCODE_LAYER[keycode] = layer;
+  }
+}
+
+const LAYER_NUMBER_TO_NAME: Record<number, string> = {
+  0: 'BASE',
+  1: 'SYM',
+  2: 'NAV',
+};
+
+const LAYER_NUMBER_TO_THUMB_ID: Record<number, string> = {
+  1: 'LT2',
+  2: 'LT1',
+};
+
 export class KeyboardHandler {
   private config: Config;
   private layout: Layout;
   private pressedLayoutIds = new Set<string>();
+  private pressedRawToLayoutId = new Map<string, string>();
+  private pressedShiftKeycodes = new Set<number>();
   private activeLayer: string;
+  private activeLayerNumbers = new Set<number>();
   private broadcast: (msg: object) => void;
   private inputCleanup?: () => void;
+  private vialCleanup?: () => void;
 
   constructor(
     configPath: string,
@@ -105,6 +137,15 @@ export class KeyboardHandler {
   }
 
   start(): void {
+    const vialCleanup = startVialHid({
+      device: this.config.vialDevice || undefined,
+      callbacks: {
+        onLayer: (layer) => this.handleVialLayer(layer),
+        onLayerKey: (layer, pressed) => this.handleVialLayerKey(layer, pressed),
+      },
+    });
+    if (vialCleanup) this.vialCleanup = vialCleanup.stop;
+
     const onKey = (code: string, pressed: boolean) => this.handleKey(code, pressed);
     let cleanup = startLinuxInput(onKey, this.config.inputDevice);
     if (!cleanup) {
@@ -114,7 +155,46 @@ export class KeyboardHandler {
     if (cleanup) this.inputCleanup = cleanup.stop;
   }
 
+  private setActiveLayer(layer: string, reason: string): void {
+    if (layer === this.activeLayer) return;
+    this.activeLayer = layer;
+    this.broadcast({ type: 'layer', layer, timestamp: Date.now() });
+    if (this.config.debug) console.log(`[Layer] -> ${layer}${reason ? ` (${reason})` : ''}`);
+  }
+
+  private activeLayerFromPressedNumbers(): string {
+    const layer = Math.max(0, ...this.activeLayerNumbers);
+    return LAYER_NUMBER_TO_NAME[layer] || this.config.defaultLayer;
+  }
+
+  private handleVialLayer(layerNumber: number): void {
+    if (this.activeLayerNumbers.size > 0) return;
+
+    const layer = LAYER_NUMBER_TO_NAME[layerNumber];
+    if (layer) this.setActiveLayer(layer, `Vial ${layerNumber}`);
+  }
+
+  private handleVialLayerKey(layerNumber: number, pressed: boolean): void {
+    const thumbId = LAYER_NUMBER_TO_THUMB_ID[layerNumber];
+    if (!thumbId) return;
+
+    if (pressed) this.activeLayerNumbers.add(layerNumber);
+    else this.activeLayerNumbers.delete(layerNumber);
+
+    const layer = this.activeLayerFromPressedNumbers();
+    this.setActiveLayer(layer, `raw ${layerNumber} ${pressed ? 'DN' : 'UP'}`);
+
+    if (pressed) this.pressedLayoutIds.add(thumbId);
+    else this.pressedLayoutIds.delete(thumbId);
+    this.broadcast({ type: 'key', code: thumbId, pressed, timestamp: Date.now() });
+  }
+
   private resolvePosition(rawCode: string, keycode: number): string {
+    const shiftedLayerMap = LAYER_SHIFTED_KEYCODE_POS[this.activeLayer];
+    if (this.pressedShiftKeycodes.size > 0 && shiftedLayerMap?.[keycode] !== undefined) {
+      return shiftedLayerMap[keycode];
+    }
+
     const layerMap = LAYER_KEYCODE_POS[this.activeLayer];
     if (layerMap && layerMap[keycode] !== undefined) return layerMap[keycode];
     return this.layout.inputMap[rawCode] || rawCode;
@@ -123,14 +203,22 @@ export class KeyboardHandler {
   private handleKey(rawCode: string, pressed: boolean): void {
     const keycode = NAME_TO_KEYCODE[rawCode] ?? -1;
 
+    if (SHIFT_KEYCODES.has(keycode)
+      && (LAYER_SHIFTED_KEYCODE_POS[this.activeLayer] || this.pressedShiftKeycodes.has(keycode))) {
+      if (pressed) this.pressedShiftKeycodes.add(keycode);
+      else this.pressedShiftKeycodes.delete(keycode);
+      if (this.config.debug) {
+        console.log(`[Key] ${pressed ? 'DN' : 'UP'} ${rawCode}(${keycode}) suppressed [${this.activeLayer}]`);
+      }
+      return;
+    }
+
     // F13/F14 detection — MO() sends these as dummy signals
-    // F13 = MO(1) = ALPHA (LT2), F14 = MO(2) = FN (LT1)
+    // F13 = MO(1) = SYM (LT2), F14 = MO(2) = NAV (LT1)
     if (keycode === 183) { // KC_F13
-      const layer = pressed ? 'ALPHA' : 'BASE';
+      const layer = pressed ? 'SYM' : 'BASE';
       if (layer !== this.activeLayer) {
-        this.activeLayer = layer;
-        this.broadcast({ type: 'layer', layer, timestamp: Date.now() });
-        if (this.config.debug) console.log(`[Layer] -> ${layer} (F13 ${pressed ? 'DN' : 'UP'})`);
+        this.setActiveLayer(layer, `F13 ${pressed ? 'DN' : 'UP'}`);
       }
       const thumbId = 'LT2';
       if (pressed) this.pressedLayoutIds.add(thumbId);
@@ -139,11 +227,9 @@ export class KeyboardHandler {
       return;
     }
     if (keycode === 184) { // KC_F14
-      const layer = pressed ? 'FN' : 'BASE';
+      const layer = pressed ? 'NAV' : 'BASE';
       if (layer !== this.activeLayer) {
-        this.activeLayer = layer;
-        this.broadcast({ type: 'layer', layer, timestamp: Date.now() });
-        if (this.config.debug) console.log(`[Layer] -> ${layer} (F14 ${pressed ? 'DN' : 'UP'})`);
+        this.setActiveLayer(layer, `F14 ${pressed ? 'DN' : 'UP'}`);
       }
       const thumbId = 'LT1';
       if (pressed) this.pressedLayoutIds.add(thumbId);
@@ -153,23 +239,28 @@ export class KeyboardHandler {
     }
 
     // Keycode-based layer detection (fallback when firmware not modified)
-    if (pressed) {
+    if (pressed && this.activeLayerNumbers.size === 0) {
       const layer = KEYCODE_LAYER[keycode] || (BASE_KEYCODES.has(keycode) ? 'BASE' : null);
       if (layer && layer !== this.activeLayer) {
-        this.activeLayer = layer;
-        this.broadcast({ type: 'layer', layer, timestamp: Date.now() });
-        if (this.config.debug) console.log(`[Layer] -> ${layer}`);
+        this.setActiveLayer(layer, 'keycode');
       }
     }
 
-    const layoutId = this.resolvePosition(rawCode, keycode);
+    const layoutId = pressed
+      ? this.resolvePosition(rawCode, keycode)
+      : this.pressedRawToLayoutId.get(rawCode) || this.resolvePosition(rawCode, keycode);
 
     if (this.config.debug) {
       console.log(`[Key] ${pressed ? 'DN' : 'UP'} ${rawCode}(${keycode}) -> ${layoutId} [${this.activeLayer}]`);
     }
 
-    if (pressed) this.pressedLayoutIds.add(layoutId);
-    else this.pressedLayoutIds.delete(layoutId);
+    if (pressed) {
+      this.pressedRawToLayoutId.set(rawCode, layoutId);
+      this.pressedLayoutIds.add(layoutId);
+    } else {
+      this.pressedRawToLayoutId.delete(rawCode);
+      this.pressedLayoutIds.delete(layoutId);
+    }
 
     this.broadcast({
       type: 'key',
@@ -183,5 +274,8 @@ export class KeyboardHandler {
   getPressedKeys(): string[] { return Array.from(this.pressedLayoutIds); }
   getConfig(): Config { return this.config; }
   getLayout(): Layout { return this.layout; }
-  destroy(): void { this.inputCleanup?.(); }
+  destroy(): void {
+    this.inputCleanup?.();
+    this.vialCleanup?.();
+  }
 }
