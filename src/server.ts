@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { KeyboardHandler } from './keyboard.js';
+import { startLocaleSync } from './locale.js';
 import type { Config } from './types.js';
 
 const CONFIG_PATH = path.resolve('config.json');
@@ -20,7 +21,12 @@ const MIME: Record<string, string> = {
 function serveFile(res: http.ServerResponse, filePath: string, mime: string): void {
   try {
     const data = fs.readFileSync(filePath, 'utf-8');
-    res.writeHead(200, { 'Content-Type': mime });
+    res.writeHead(200, {
+      'Content-Type': mime,
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
     res.end(data);
   } catch {
     res.writeHead(404);
@@ -45,25 +51,31 @@ try {
 }
 
 const server = http.createServer((req: http.IncomingMessage, res: http.ServerResponse) => {
-  const url = req.url || '/';
+  const url = new URL(req.url || '/', 'http://localhost');
+  const pathname = url.pathname;
 
-  if (url === '/') {
+  if (pathname === '/') {
     serveFile(res, HTML_PATH, 'text/html');
     return;
   }
 
-  if (url === '/layout.json') {
+  if (pathname === '/layout.json') {
     serveFile(res, LAYOUT_PATH, 'application/json');
     return;
   }
 
-  if (url === '/config.json') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
+  if (pathname === '/config.json') {
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
     res.end(JSON.stringify({ defaultLayer: config.defaultLayer }));
     return;
   }
 
-  const publicFile = path.join('public', url);
+  const publicFile = path.join('public', pathname);
   const ext = path.extname(publicFile);
   if (ext && MIME[ext]) {
     serveFile(res, path.resolve(publicFile), MIME[ext]);
@@ -76,12 +88,28 @@ const server = http.createServer((req: http.IncomingMessage, res: http.ServerRes
 
 const wss = new WebSocketServer({ server, path: WS_PATH });
 
-const keyboard = new KeyboardHandler(CONFIG_PATH, LAYOUT_PATH, (msg: object) => {
+let activeLocale = 'en';
+
+function broadcast(msg: object): void {
+  const payload = 'type' in msg ? { locale: activeLocale, ...msg } : msg;
   wss.clients.forEach((client: WebSocket) => {
     if (client.readyState === 1) {
-      client.send(JSON.stringify(msg));
+      client.send(JSON.stringify(payload));
     }
   });
+}
+
+const keyboard = new KeyboardHandler(CONFIG_PATH, LAYOUT_PATH, broadcast);
+
+const localeSync = startLocaleSync({
+  enabled: config.localeSync ?? false,
+  keyboardName: config.localeKeyboardName || undefined,
+  pollMs: config.localePollMs ?? 500,
+  onLocale: (locale) => {
+    activeLocale = locale;
+    broadcast({ type: 'locale', locale, timestamp: Date.now() });
+    if (config.debugLayers ?? config.debug) console.log(`[Locale] -> ${locale}`);
+  },
 });
 
 wss.on('connection', (ws: WebSocket) => {
@@ -91,6 +119,9 @@ wss.on('connection', (ws: WebSocket) => {
     type: 'state',
     layer: keyboard.getActiveLayer(),
     pressedCodes: keyboard.getPressedKeys(),
+    shifted: keyboard.isShifted(),
+    modifiers: keyboard.getModifiers(),
+    locale: activeLocale,
   }));
 
   ws.on('close', () => console.log('[Server] WebSocket disconnected'));
@@ -106,6 +137,7 @@ server.listen(config.port, () => {
 process.on('SIGINT', () => {
   console.log('[Server] Shutting down...');
   keyboard.destroy();
+  localeSync?.stop();
   wss.close();
   server.close();
   process.exit(0);

@@ -1,5 +1,6 @@
 import fs from 'fs';
-import type { Config, Layout } from './types.js';
+import path from 'path';
+import type { Config, KeymapConfig, Layout, ModifierMode, ModifierState } from './types.js';
 import { startLinuxInput } from './input-linux.js';
 import { startStdinInput } from './input-stdin.js';
 import { startVialHid } from './vial-hid.js';
@@ -35,70 +36,48 @@ const KEYCODE_TO_NAME: Record<number, string> = {
 const NAME_TO_KEYCODE: Record<string, number> = {};
 for (const [k, v] of Object.entries(KEYCODE_TO_NAME)) NAME_TO_KEYCODE[v] = Number(k);
 
-// Per-layer: linuxKeycode → physical position ID
-// Built from Vial layout raw keycodes
-const LAYER_KEYCODE_POS: Record<string, Record<number, string>> = {
-  SYM: {
-    15: 'L00', 1: 'L10', 27: 'R00', 43: 'R10',
-    2: 'L11', 3: 'L12', 4: 'L13', 5: 'L14', 6: 'L15',   // 1-5
-    7: 'R15', 8: 'R14', 9: 'R13', 10: 'R12', 11: 'R11',  // 6-0
-    12: 'L23', 13: 'L24',                                  // - =
-  },
-  NAV: {
-    59: 'L00', 60: 'L01', 61: 'L02', 62: 'L03', 63: 'L04', 64: 'L05',
-    65: 'R05', 66: 'R04', 67: 'R03', 68: 'R02', 87: 'R01', 88: 'R00',
-    225: 'L10', 210: 'L11', 274: 'L12', 273: 'L13', 272: 'L14',
-    224: 'L20', 113: 'L21', 165: 'L22', 164: 'L23', 163: 'L24',
-    104: 'R10', 115: 'R11', 106: 'R12', 103: 'R13', 108: 'R14', 105: 'R15',
-    109: 'R20', 114: 'R21',
-  },
+const MODIFIER_KEYCODE_MODE: Record<number, ModifierMode> = {
+  29: 'ctrl', 97: 'ctrl',
+  42: 'shift', 54: 'shift',
+  56: 'alt', 100: 'alt',
+  125: 'super', 126: 'super',
 };
 
-const LAYER_SHIFTED_KEYCODE_POS: Record<string, Record<number, string>> = {
-  SYM: {
-    2: 'L01', 3: 'L02', 4: 'L03', 5: 'L04', 6: 'L05',   // ! @ # $ %
-    7: 'R05', 8: 'R04', 9: 'R03', 10: 'R02', 11: 'R01', // ^ & * ( )
-    41: 'L20', 12: 'L21', 13: 'L22',                    // ~ _ +
-    26: 'R24', 27: 'R23', 51: 'R22', 52: 'R21',         // { } < >
-  },
+const EMPTY_KEYMAP: KeymapConfig = {
+  layers: { 0: { name: 'BASE' } },
+  positions: {},
+  shiftedPositions: {},
+  baseKeycodes: [],
+  shiftKeycodes: [],
 };
 
-const SHIFT_KEYCODES = new Set([42, 54]);
-
-// BASE-only keycodes (keys that don't change between layers)
-const BASE_KEYCODES = new Set<number>([
-  16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-  30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
-  41, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53,
-  40, 43, 26, 27, 57, 15, 1, 14, 28, 111,
-]);
-
-// Keycodes that uniquely identify a layer. Base duplicates are ignored.
-const KEYCODE_LAYER: Record<number, string> = {};
-for (const [layer, map] of Object.entries(LAYER_KEYCODE_POS)) {
-  for (const kc of Object.keys(map)) {
-    const keycode = Number(kc);
-    if (!BASE_KEYCODES.has(keycode)) KEYCODE_LAYER[keycode] = layer;
-  }
+function numericMap(map: Record<string, string> = {}): Record<number, string> {
+  const result: Record<number, string> = {};
+  for (const [key, value] of Object.entries(map)) result[Number(key)] = value;
+  return result;
 }
-
-const LAYER_NUMBER_TO_NAME: Record<number, string> = {
-  0: 'BASE',
-  1: 'SYM',
-  2: 'NAV',
-};
-
-const LAYER_NUMBER_TO_THUMB_ID: Record<number, string> = {
-  1: 'LT2',
-  2: 'LT1',
-};
 
 export class KeyboardHandler {
   private config: Config;
   private layout: Layout;
+  private keymap: KeymapConfig;
+  private layerKeycodePos: Record<string, Record<number, string>> = {};
+  private layerShiftedKeycodePos: Record<string, Record<number, string>> = {};
+  private keycodeLayer: Record<number, string> = {};
+  private baseKeycodes = new Set<number>();
+  private shiftKeycodes = new Set<number>();
+  private layerNumberToName: Record<number, string> = {};
+  private layerNumberToThumbId: Record<number, string> = {};
   private pressedLayoutIds = new Set<string>();
   private pressedRawToLayoutId = new Map<string, string>();
+  private stuckKeyTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private pressedShiftKeycodes = new Set<number>();
+  private activeModifierKeycodes: Record<ModifierMode, Set<number>> = {
+    shift: new Set(),
+    ctrl: new Set(),
+    alt: new Set(),
+    super: new Set(),
+  };
   private activeLayer: string;
   private activeLayerNumbers = new Set<number>();
   private broadcast: (msg: object) => void;
@@ -112,6 +91,8 @@ export class KeyboardHandler {
   ) {
     this.config = this.loadConfig(configPath);
     this.layout = this.loadLayout(layoutPath);
+    this.keymap = this.loadKeymap(this.config.keymapPath || 'keymap.json');
+    this.applyKeymap(this.keymap);
     this.activeLayer = this.config.defaultLayer;
     this.broadcast = broadcast;
   }
@@ -123,8 +104,47 @@ export class KeyboardHandler {
       return {
         port: 7777, webSocketPath: '/ws', defaultLayer: 'BASE',
         hideSignalKeys: true, debug: true,
+        stuckKeyTimeoutMs: 10000,
         layerSignals: [], momentaryLayerSignals: [],
       };
+    }
+  }
+
+  private loadKeymap(keymapPath: string): KeymapConfig {
+    try {
+      return JSON.parse(fs.readFileSync(path.resolve(keymapPath), 'utf-8')) as KeymapConfig;
+    } catch {
+      console.warn(`[Keyboard] Failed to load ${keymapPath}, using empty keymap`);
+      return EMPTY_KEYMAP;
+    }
+  }
+
+  private applyKeymap(keymap: KeymapConfig): void {
+    this.layerNumberToName = {};
+    this.layerNumberToThumbId = {};
+    for (const [layerNumber, layer] of Object.entries(keymap.layers)) {
+      const numericLayer = Number(layerNumber);
+      this.layerNumberToName[numericLayer] = layer.name;
+      if (layer.thumbId) this.layerNumberToThumbId[numericLayer] = layer.thumbId;
+    }
+
+    this.layerKeycodePos = {};
+    for (const [layer, map] of Object.entries(keymap.positions)) {
+      this.layerKeycodePos[layer] = numericMap(map);
+    }
+
+    this.layerShiftedKeycodePos = {};
+    for (const [layer, map] of Object.entries(keymap.shiftedPositions)) {
+      this.layerShiftedKeycodePos[layer] = numericMap(map);
+    }
+
+    this.baseKeycodes = new Set(keymap.baseKeycodes);
+    this.shiftKeycodes = new Set(keymap.shiftKeycodes);
+    this.keycodeLayer = {};
+    for (const [layer, map] of Object.entries(this.layerKeycodePos)) {
+      for (const keycode of Object.keys(map).map(Number)) {
+        if (!this.baseKeycodes.has(keycode)) this.keycodeLayer[keycode] = layer;
+      }
     }
   }
 
@@ -139,6 +159,7 @@ export class KeyboardHandler {
   start(): void {
     const vialCleanup = startVialHid({
       device: this.config.vialDevice || undefined,
+      debug: this.debugEnabled('hid'),
       callbacks: {
         onLayer: (layer) => this.handleVialLayer(layer),
         onLayerKey: (layer, pressed) => this.handleVialLayerKey(layer, pressed),
@@ -155,27 +176,33 @@ export class KeyboardHandler {
     if (cleanup) this.inputCleanup = cleanup.stop;
   }
 
+  private debugEnabled(kind: 'keys' | 'layers' | 'hid'): boolean {
+    if (kind === 'keys') return this.config.debugKeys ?? this.config.debug;
+    if (kind === 'layers') return this.config.debugLayers ?? this.config.debug;
+    return this.config.debugHid ?? this.config.debug;
+  }
+
   private setActiveLayer(layer: string, reason: string): void {
     if (layer === this.activeLayer) return;
     this.activeLayer = layer;
     this.broadcast({ type: 'layer', layer, timestamp: Date.now() });
-    if (this.config.debug) console.log(`[Layer] -> ${layer}${reason ? ` (${reason})` : ''}`);
+    if (this.debugEnabled('layers')) console.log(`[Layer] -> ${layer}${reason ? ` (${reason})` : ''}`);
   }
 
   private activeLayerFromPressedNumbers(): string {
     const layer = Math.max(0, ...this.activeLayerNumbers);
-    return LAYER_NUMBER_TO_NAME[layer] || this.config.defaultLayer;
+    return this.layerNumberToName[layer] || this.config.defaultLayer;
   }
 
   private handleVialLayer(layerNumber: number): void {
     if (this.activeLayerNumbers.size > 0) return;
 
-    const layer = LAYER_NUMBER_TO_NAME[layerNumber];
+    const layer = this.layerNumberToName[layerNumber];
     if (layer) this.setActiveLayer(layer, `Vial ${layerNumber}`);
   }
 
   private handleVialLayerKey(layerNumber: number, pressed: boolean): void {
-    const thumbId = LAYER_NUMBER_TO_THUMB_ID[layerNumber];
+    const thumbId = this.layerNumberToThumbId[layerNumber];
     if (!thumbId) return;
 
     if (pressed) this.activeLayerNumbers.add(layerNumber);
@@ -189,49 +216,91 @@ export class KeyboardHandler {
     this.broadcast({ type: 'key', code: thumbId, pressed, timestamp: Date.now() });
   }
 
+  private setModifierPressed(mode: ModifierMode, keycode: number, pressed: boolean): void {
+    const before = JSON.stringify(this.getModifiers());
+    if (pressed) this.activeModifierKeycodes[mode].add(keycode);
+    else this.activeModifierKeycodes[mode].delete(keycode);
+    const modifiers = this.getModifiers();
+    if (JSON.stringify(modifiers) === before) return;
+    this.broadcast({ type: 'modifier', shifted: modifiers.shift, modifiers, timestamp: Date.now() });
+    if (this.debugEnabled('layers')) console.log(`[Modifier] -> ${JSON.stringify(modifiers)}`);
+  }
+
   private resolvePosition(rawCode: string, keycode: number): string {
-    const shiftedLayerMap = LAYER_SHIFTED_KEYCODE_POS[this.activeLayer];
+    const shiftedLayerMap = this.layerShiftedKeycodePos[this.activeLayer];
     if (this.pressedShiftKeycodes.size > 0 && shiftedLayerMap?.[keycode] !== undefined) {
       return shiftedLayerMap[keycode];
     }
 
-    const layerMap = LAYER_KEYCODE_POS[this.activeLayer];
+    const layerMap = this.layerKeycodePos[this.activeLayer];
     if (layerMap && layerMap[keycode] !== undefined) return layerMap[keycode];
     return this.layout.inputMap[rawCode] || rawCode;
+  }
+
+  private scheduleStuckKeyClear(rawCode: string, layoutId: string): void {
+    const timeout = this.config.stuckKeyTimeoutMs ?? 10000;
+    if (timeout <= 0) return;
+
+    const existing = this.stuckKeyTimers.get(rawCode);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+      if (this.pressedRawToLayoutId.get(rawCode) !== layoutId) return;
+      this.pressedRawToLayoutId.delete(rawCode);
+      this.pressedLayoutIds.delete(layoutId);
+      this.stuckKeyTimers.delete(rawCode);
+      this.broadcast({ type: 'key', code: layoutId, pressed: false, timestamp: Date.now() });
+      if (this.debugEnabled('keys')) console.log(`[Key] auto-clear ${rawCode} -> ${layoutId}`);
+    }, timeout);
+    this.stuckKeyTimers.set(rawCode, timer);
+  }
+
+  private clearStuckKeyTimer(rawCode: string): void {
+    const timer = this.stuckKeyTimers.get(rawCode);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.stuckKeyTimers.delete(rawCode);
   }
 
   private handleKey(rawCode: string, pressed: boolean): void {
     const keycode = NAME_TO_KEYCODE[rawCode] ?? -1;
 
-    if (SHIFT_KEYCODES.has(keycode)
-      && (LAYER_SHIFTED_KEYCODE_POS[this.activeLayer] || this.pressedShiftKeycodes.has(keycode))) {
+    if (this.shiftKeycodes.has(keycode)
+      && (this.layerShiftedKeycodePos[this.activeLayer] || this.pressedShiftKeycodes.has(keycode))) {
       if (pressed) this.pressedShiftKeycodes.add(keycode);
       else this.pressedShiftKeycodes.delete(keycode);
-      if (this.config.debug) {
+      if (this.debugEnabled('keys')) {
         console.log(`[Key] ${pressed ? 'DN' : 'UP'} ${rawCode}(${keycode}) suppressed [${this.activeLayer}]`);
       }
       return;
     }
 
+    const modifierMode = MODIFIER_KEYCODE_MODE[keycode];
+    if (modifierMode) {
+      this.setModifierPressed(modifierMode, keycode, pressed);
+    }
+
     // F13/F14 detection — MO() sends these as dummy signals
-    // F13 = MO(1) = SYM (LT2), F14 = MO(2) = NAV (LT1)
+    // Legacy firmware fallback: F13 = MO(1), F14 = MO(2).
     if (keycode === 183) { // KC_F13
-      const layer = pressed ? 'SYM' : 'BASE';
+      const layer = pressed ? this.layerNumberToName[1] : this.config.defaultLayer;
+      const thumbId = this.layerNumberToThumbId[1];
+      if (!layer || !thumbId) return;
       if (layer !== this.activeLayer) {
         this.setActiveLayer(layer, `F13 ${pressed ? 'DN' : 'UP'}`);
       }
-      const thumbId = 'LT2';
       if (pressed) this.pressedLayoutIds.add(thumbId);
       else this.pressedLayoutIds.delete(thumbId);
       this.broadcast({ type: 'key', code: thumbId, pressed, timestamp: Date.now() });
       return;
     }
     if (keycode === 184) { // KC_F14
-      const layer = pressed ? 'NAV' : 'BASE';
+      const layer = pressed ? this.layerNumberToName[2] : this.config.defaultLayer;
+      const thumbId = this.layerNumberToThumbId[2];
+      if (!layer || !thumbId) return;
       if (layer !== this.activeLayer) {
         this.setActiveLayer(layer, `F14 ${pressed ? 'DN' : 'UP'}`);
       }
-      const thumbId = 'LT1';
       if (pressed) this.pressedLayoutIds.add(thumbId);
       else this.pressedLayoutIds.delete(thumbId);
       this.broadcast({ type: 'key', code: thumbId, pressed, timestamp: Date.now() });
@@ -240,7 +309,7 @@ export class KeyboardHandler {
 
     // Keycode-based layer detection (fallback when firmware not modified)
     if (pressed && this.activeLayerNumbers.size === 0) {
-      const layer = KEYCODE_LAYER[keycode] || (BASE_KEYCODES.has(keycode) ? 'BASE' : null);
+      const layer = this.keycodeLayer[keycode] || (this.baseKeycodes.has(keycode) ? 'BASE' : null);
       if (layer && layer !== this.activeLayer) {
         this.setActiveLayer(layer, 'keycode');
       }
@@ -250,14 +319,16 @@ export class KeyboardHandler {
       ? this.resolvePosition(rawCode, keycode)
       : this.pressedRawToLayoutId.get(rawCode) || this.resolvePosition(rawCode, keycode);
 
-    if (this.config.debug) {
+    if (this.debugEnabled('keys')) {
       console.log(`[Key] ${pressed ? 'DN' : 'UP'} ${rawCode}(${keycode}) -> ${layoutId} [${this.activeLayer}]`);
     }
 
     if (pressed) {
       this.pressedRawToLayoutId.set(rawCode, layoutId);
       this.pressedLayoutIds.add(layoutId);
+      this.scheduleStuckKeyClear(rawCode, layoutId);
     } else {
+      this.clearStuckKeyTimer(rawCode);
       this.pressedRawToLayoutId.delete(rawCode);
       this.pressedLayoutIds.delete(layoutId);
     }
@@ -266,16 +337,27 @@ export class KeyboardHandler {
       type: 'key',
       code: layoutId,
       pressed,
+      modifier: modifierMode,
       timestamp: Date.now(),
     });
   }
 
   getActiveLayer(): string { return this.activeLayer; }
   getPressedKeys(): string[] { return Array.from(this.pressedLayoutIds); }
+  getModifiers(): ModifierState {
+    return {
+      shift: this.activeModifierKeycodes.shift.size > 0,
+      ctrl: this.activeModifierKeycodes.ctrl.size > 0,
+      alt: this.activeModifierKeycodes.alt.size > 0,
+      super: this.activeModifierKeycodes.super.size > 0,
+    };
+  }
+  isShifted(): boolean { return this.getModifiers().shift; }
   getConfig(): Config { return this.config; }
   getLayout(): Layout { return this.layout; }
   destroy(): void {
     this.inputCleanup?.();
     this.vialCleanup?.();
+    for (const timer of this.stuckKeyTimers.values()) clearTimeout(timer);
   }
 }

@@ -59,6 +59,7 @@ export type VialHidCallbacks = {
 
 export function startVialHid(options: {
   device?: string;
+  debug?: boolean;
   callbacks: VialHidCallbacks;
 }): { stop: () => void } | null {
   const { callbacks } = options;
@@ -111,7 +112,7 @@ export function startVialHid(options: {
           if (resp[0] === CUSTOM_LAYER_EVENT) {
             callbacks.onLayerKey?.(resp[1], resp[2] === 1);
           } else {
-            if (pollCount < 3 || pollCount % 20 === 0) {
+            if (options.debug && (pollCount < 3 || pollCount % 20 === 0)) {
               console.log(`[Vial] poll#${pollCount}: ${bytesRead}b [${resp[0]},${resp[1]},${resp[2]}]`);
             }
             callbacks.onLayer(resp[2]);

@@ -37,8 +37,101 @@ body {
   min-height: 0;
 }
 
+#modifier-modes {
+  position: absolute;
+  top: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.mode-chip {
+  opacity: 0;
+  min-width: 0;
+  height: 18px;
+  justify-self: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px solid rgba(220, 225, 235, 0.2);
+  background: rgba(20, 20, 25, 0.65);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    opacity 0.08s,
+    background-color 0.08s,
+    border-color 0.08s,
+    box-shadow 0.08s;
+}
+
+#locale-chip {
+  height: 18px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(220, 225, 235, 0.28);
+  background: rgba(20, 20, 25, 0.72);
+  color: rgba(255, 255, 255, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.08);
+}
+
+#locale-chip.locale-ru {
+  border-color: rgba(255, 120, 180, 0.85);
+  background: rgba(255, 80, 150, 0.28);
+  box-shadow: 0 0 14px rgba(255, 80, 150, 0.28);
+}
+
+.mode-chip.mode-active {
+  opacity: 1;
+}
+
+.mode-shift.mode-active {
+  background: rgba(80, 160, 255, 0.35);
+  border-color: rgba(100, 180, 255, 0.9);
+  box-shadow: 0 0 14px rgba(100, 180, 255, 0.35);
+}
+
+.mode-ctrl.mode-active {
+  background: rgba(165, 120, 255, 0.35);
+  border-color: rgba(185, 145, 255, 0.9);
+  box-shadow: 0 0 14px rgba(185, 145, 255, 0.35);
+}
+
+.mode-alt.mode-active {
+  background: rgba(255, 180, 70, 0.35);
+  border-color: rgba(255, 190, 80, 0.9);
+  box-shadow: 0 0 14px rgba(255, 190, 80, 0.35);
+}
+
+.mode-super.mode-active {
+  background: rgba(80, 220, 150, 0.35);
+  border-color: rgba(100, 235, 165, 0.9);
+  box-shadow: 0 0 14px rgba(100, 235, 165, 0.35);
+}
+
 #keyboard-container {
   transform-origin: center center;
+  position: relative;
+}
+
+#keyboard-container.force-repaint {
+  filter: brightness(1.001);
 }
 
 #keyboard-layout {
@@ -68,7 +161,16 @@ body {
   background-color: rgba(40, 40, 48, 0.92);
 }
 
+.thumb-left {
+  justify-content: flex-end;
+}
+
+.thumb-right {
+  justify-content: flex-start;
+}
+
 .key {
+  position: relative;
   width: 48px;
   height: 48px;
   background-color: rgba(30, 30, 35, 0.92);
@@ -87,11 +189,107 @@ body {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
+.key-hrm::after {
+  content: attr(data-mod-glyph);
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.6;
+}
+
+.key-hrm::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.08s;
+}
+
+.key-hrm-super::after {
+  color: rgba(100, 235, 165, 0.95);
+}
+
+.key-hrm-alt::after {
+  color: rgba(255, 190, 80, 0.95);
+}
+
+.key-hrm-shift::after {
+  color: rgba(100, 180, 255, 0.95);
+}
+
+.key-hrm-ctrl::after {
+  color: rgba(185, 145, 255, 0.95);
+}
+
+.key-mode-active::after {
+  opacity: 1;
+}
+
+.key-mode-active::before {
+  opacity: 1;
+}
+
+.key-mod-shift::before {
+  background: linear-gradient(
+    135deg,
+    rgba(100, 180, 255, 0.28),
+    transparent 55%
+  );
+}
+
+.key-mod-ctrl::before {
+  background: linear-gradient(
+    135deg,
+    rgba(185, 145, 255, 0.28),
+    transparent 55%
+  );
+}
+
+.key-mod-alt::before {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 190, 80, 0.28),
+    transparent 55%
+  );
+}
+
+.key-mod-super::before {
+  background: linear-gradient(
+    135deg,
+    rgba(100, 235, 165, 0.28),
+    transparent 55%
+  );
+}
+
 .key-pressed {
   background-color: rgba(100, 180, 255, 0.3) !important;
   border-color: rgba(100, 180, 255, 0.7) !important;
   transform: translateY(1px);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.key-mod-shift {
+  border-color: rgba(100, 180, 255, 0.95) !important;
+  box-shadow: 0 0 16px rgba(100, 180, 255, 0.45) !important;
+}
+
+.key-mod-ctrl {
+  border-color: rgba(185, 145, 255, 0.95) !important;
+  box-shadow: 0 0 16px rgba(185, 145, 255, 0.45) !important;
+}
+
+.key-mod-alt {
+  border-color: rgba(255, 190, 80, 0.95) !important;
+  box-shadow: 0 0 16px rgba(255, 190, 80, 0.45) !important;
+}
+
+.key-mod-super {
+  border-color: rgba(100, 235, 165, 0.95) !important;
+  box-shadow: 0 0 16px rgba(100, 235, 165, 0.45) !important;
 }
 
 #active-layer-indicator {
