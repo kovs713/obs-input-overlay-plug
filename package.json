@@ -1,0 +1,26 @@
+{
+  "name": "vial-obs-overlay",
+  "version": "1.0.0",
+  "description": "Bun-based OBS overlay for split keyboard with live key presses and layer switching",
+  "main": "src/server.ts",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/server.ts",
+    "start": "bun run src/server.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["obs", "overlay", "keyboard", "vial", "websocket"],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/ws": "^8.18.1",
+    "bun-types": "latest",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.14.0"
+  },
+  "private": true
+}

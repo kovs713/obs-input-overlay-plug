@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OBS Keyboard Overlay</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="overlay">
+    <div id="keyboard-wrapper">
+      <div id="keyboard-container">
+        <div id="keyboard-layout"></div>
+      </div>
+    </div>
+    <div id="active-layer-indicator">
+      <span id="layer-name">BASE</span>
+      <div id="connection-indicator" class="disconnected">
+        <span id="status-dot">○</span>
+        <span id="status-text">Disconnected</span>
+      </div>
+    </div>
+  </div>
+  <script src="overlay.js"></script>
+</body>
+</html>

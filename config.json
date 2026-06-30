@@ -1,0 +1,11 @@
+{
+  "port": 7777,
+  "webSocketPath": "/ws",
+  "defaultLayer": "BASE",
+  "hideSignalKeys": true,
+  "debug": true,
+  "layerSignals": [],
+  "momentaryLayerSignals": [],
+  "inputDevice": "/dev/input/by-path/pci-0000:00:14.0-usb-0:13:1.0-event-kbd",
+  "vialDevice": ""
+}
