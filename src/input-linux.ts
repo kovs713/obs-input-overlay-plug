@@ -33,6 +33,39 @@ const KEY: Record<number, string> = {
   193: 'F23', 194: 'F24',
 };
 
+function formatError(err: any): string {
+  return `${err?.code ? `${err.code}: ` : ''}${err?.message || String(err)}`;
+}
+
+async function deviceExists(device: string): Promise<boolean> {
+  try {
+    await fs.promises.stat(device);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function listKeyboardDevices(dir: string, filter: (entry: string) => boolean): Promise<string[]> {
+  try {
+    const entries = await fs.promises.readdir(dir);
+    const candidates = entries.filter(filter).map(entry => path.join(dir, entry));
+    const devices = await Promise.all(candidates.map(async device => (await deviceExists(device) ? device : null)));
+    return devices.filter((device): device is string => Boolean(device));
+  } catch {
+    return [];
+  }
+}
+
+async function discoverKeyboardDevices(): Promise<string[]> {
+  const byPath = await listKeyboardDevices('/dev/input/by-path/', entry => (
+    entry.includes('-event-kbd') && !entry.includes('mouse')
+  ));
+  if (byPath.length > 0) return byPath;
+
+  return listKeyboardDevices('/dev/input/by-id/', entry => entry.includes('-event-kbd'));
+}
+
 export function startLinuxInput(
   onKey: (code: string, pressed: boolean) => void,
   preferredDevice?: string,
@@ -40,7 +73,7 @@ export function startLinuxInput(
   let running = true;
   const handles: any[] = [];
 
-  async function readLoop(device: string) {
+  async function readLoop(device: string): Promise<boolean> {
     try {
       console.log('[Input] Opening device:', device);
       const handle = await fs.promises.open(device, 'r');
@@ -72,30 +105,28 @@ export function startLinuxInput(
           }
         }
       }
-    } catch (err) {
-      console.error('[Input] Failed to open device:', device, err);
+      return true;
+    } catch (err: any) {
+      if (err?.code === 'EACCES') {
+        console.error(`[Input] Permission denied: ${device}. Add your user to the input group or configure a udev rule.`);
+      } else {
+        console.error(`[Input] Failed to open device: ${device}: ${formatError(err)}`);
+      }
+      return false;
     }
   }
 
   async function run() {
     let devices: string[] = [];
     if (preferredDevice) {
-      devices = [preferredDevice];
-    } else {
-      try {
-        const byPath = await fs.promises.readdir('/dev/input/by-path/');
-        devices = byPath
-          .filter(e => e.includes('-event-kbd') && !e.includes('mouse'))
-          .map(e => `/dev/input/by-path/${e}`);
-      } catch {}
-      if (devices.length === 0) {
-        try {
-          const byId = await fs.promises.readdir('/dev/input/by-id/');
-          devices = byId
-            .filter(e => e.includes('-event-kbd'))
-            .map(e => `/dev/input/by-id/${e}`);
-        } catch {}
+      if (await deviceExists(preferredDevice)) {
+        devices = [preferredDevice];
+      } else {
+        console.warn(`[Input] Preferred device not found: ${preferredDevice}`);
+        devices = await discoverKeyboardDevices();
       }
+    } else {
+      devices = await discoverKeyboardDevices();
     }
 
     if (!devices.length) {
@@ -104,7 +135,8 @@ export function startLinuxInput(
     }
 
     console.log('[Input] Found devices:', devices.join(', '));
-    await Promise.all(devices.map(d => readLoop(d)));
+    const opened = await Promise.all(devices.map(d => readLoop(d)));
+    if (running && !opened.some(Boolean)) console.error('[Input] No keyboard devices opened');
   }
 
   run().catch(err => {

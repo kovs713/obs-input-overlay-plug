@@ -1,33 +1,26 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OBS Keyboard Overlay</title>
-  <link rel="stylesheet" href="style.css">
-</head>
-<body>
-  <div id="overlay">
-    <div id="keyboard-wrapper">
-      <div id="keyboard-container">
-        <div id="modifier-modes" aria-label="modifier modes">
-          <span id="locale-chip">EN</span>
-          <span class="mode-chip mode-super" data-mode="super">⌘ Super</span>
-          <span class="mode-chip mode-alt" data-mode="alt">⌥ Alt</span>
-          <span class="mode-chip mode-ctrl" data-mode="ctrl">⌃ Ctrl</span>
-          <span class="mode-chip mode-shift" data-mode="shift">⇧ Shift</span>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OBS Keyboard Overlay</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="overlay">
+      <div id="keyboard-wrapper">
+        <div id="keyboard-container">
+          <div id="keyboard-layout"></div>
         </div>
-        <div id="keyboard-layout"></div>
+      </div>
+      <div id="active-layer-indicator">
+        <span id="layer-name">BASE</span>
+        <div id="connection-indicator" class="disconnected">
+          <span id="status-dot">○</span>
+          <span id="status-text">Disconnected</span>
+        </div>
       </div>
     </div>
-    <div id="active-layer-indicator">
-      <span id="layer-name">BASE</span>
-      <div id="connection-indicator" class="disconnected">
-        <span id="status-dot">○</span>
-        <span id="status-text">Disconnected</span>
-      </div>
-    </div>
-  </div>
-  <script src="overlay.js?v=modifier-modes-1"></script>
-</body>
+    <script src="overlay.js?v=hrm-status-1"></script>
+  </body>
 </html>

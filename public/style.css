@@ -37,20 +37,6 @@ body {
   min-height: 0;
 }
 
-#modifier-modes {
-  position: absolute;
-  top: -24px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  justify-content: center;
-  height: 18px;
-  pointer-events: none;
-  white-space: nowrap;
-}
-
 .mode-chip {
   opacity: 0;
   min-width: 0;
@@ -128,6 +114,7 @@ body {
 #keyboard-container {
   transform-origin: center center;
   position: relative;
+  padding-top: 24px;
 }
 
 #keyboard-container.force-repaint {
@@ -187,6 +174,25 @@ body {
     border-color 0.08s;
   user-select: none;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.key-label {
+  position: relative;
+  z-index: 1;
+}
+
+.hrm-status {
+  position: absolute;
+  top: -78px;
+  left: 50%;
+  transform: translateX(-50%);
+  opacity: 0.32;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.hrm-status.mode-active {
+  opacity: 1;
 }
 
 .key-hrm::after {
@@ -393,6 +399,9 @@ body {
   .keyboard-side {
     gap: 5px;
   }
+  .hrm-status {
+    top: -69px;
+  }
 }
 
 @media (max-width: 1200px) {
@@ -410,5 +419,8 @@ body {
   }
   .keyboard-side {
     gap: 4px;
+  }
+  .hrm-status {
+    top: -62px;
   }
 }

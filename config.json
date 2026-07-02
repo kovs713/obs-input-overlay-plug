@@ -14,6 +14,6 @@
   "localeKeyboardName": "",
   "layerSignals": [],
   "momentaryLayerSignals": [],
-  "inputDevice": "/dev/input/by-path/pci-0000:00:14.0-usb-0:13:1.0-event-kbd",
+  "inputDevice": "/dev/input/by-id/usb-Squalius-cephalus_silakka54_vial:f64c2b3c-event-kbd",
   "vialDevice": ""
 }

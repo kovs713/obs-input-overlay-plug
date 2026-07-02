@@ -5,6 +5,7 @@ class Overlay {
     this.activeLayer = 'BASE';
     this.shifted = false;
     this.modifiers = { shift: false, ctrl: false, alt: false, super: false };
+    this.modifierLabels = { shift: 'Shift', ctrl: 'Ctrl', alt: 'Alt', super: 'Super' };
     this.locale = 'en';
     this.pressedKeys = new Set();
     this.pressedKeyModifiers = new Map();
@@ -88,6 +89,7 @@ class Overlay {
         this.pressedKeys = new Set(msg.pressedCodes);
         this.shifted = Boolean(msg.shifted);
         this.modifiers = this.normalizeModifiers(msg.modifiers, this.shifted);
+        this.syncPressedKeyModifiers();
         this.locale = this.normalizeLocale(msg.locale);
         this.updateUI();
         break;
@@ -135,6 +137,14 @@ class Overlay {
       alt: Boolean(modifiers?.alt),
       super: Boolean(modifiers?.super),
     };
+  }
+
+  syncPressedKeyModifiers() {
+    this.pressedKeyModifiers.clear();
+    for (const code of this.pressedKeys) {
+      const hrm = this.hrmMods[code];
+      if (hrm && this.modifiers[hrm.mode]) this.pressedKeyModifiers.set(code, hrm.mode);
+    }
   }
 
   updateUI() {
@@ -186,12 +196,22 @@ class Overlay {
           if (key.width !== 1) {
             el.style.width = `calc(48px * ${key.width} + 8px * ${key.width - 1})`;
           }
+          const labelEl = document.createElement('span');
+          labelEl.className = 'key-label';
+          labelEl.textContent = this.getKeyLabel(key.id);
           const hrm = this.hrmMods[key.id];
           if (hrm) {
             el.classList.add('key-hrm', `key-hrm-${hrm.mode}`);
             el.dataset.modGlyph = hrm.glyph;
+            const statusEl = document.createElement('span');
+            statusEl.className = `mode-chip hrm-status mode-${hrm.mode}`;
+            statusEl.dataset.keyId = key.id;
+            statusEl.dataset.mode = hrm.mode;
+            statusEl.textContent = this.modifierLabels[hrm.mode];
+            statusEl.setAttribute('aria-hidden', 'true');
+            el.appendChild(statusEl);
           }
-          el.textContent = this.getKeyLabel(key.id);
+          el.appendChild(labelEl);
           rowEl.appendChild(el);
         }
 
@@ -254,12 +274,14 @@ class Overlay {
       el.classList.toggle('key-mod-super', modifier === 'super');
       el.classList.toggle('key-mode-active', Boolean(modifier));
     });
+    this.updateModifierModes();
   }
 
   updateModifierModes() {
-    document.querySelectorAll('.mode-chip').forEach((el) => {
+    document.querySelectorAll('.hrm-status').forEach((el) => {
+      const keyId = el.dataset.keyId;
       const mode = el.dataset.mode;
-      el.classList.toggle('mode-active', Boolean(this.modifiers[mode]));
+      el.classList.toggle('mode-active', this.pressedKeyModifiers.get(keyId) === mode);
     });
   }
 
@@ -273,7 +295,8 @@ class Overlay {
   updateKeyLabels() {
     document.querySelectorAll('.key').forEach((el) => {
       const id = el.id.replace('key-', '');
-      el.textContent = this.getKeyLabel(id);
+      const label = el.querySelector('.key-label');
+      if (label) label.textContent = this.getKeyLabel(id);
     });
   }
 
